@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>City Life Online 2D</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html,body{height:100%;margin:0;background:#101620;overflow:hidden;font-family:system-ui,sans-serif;color:#fff}
+canvas{display:block}
+.box{position:fixed;background:rgba(15,20,30,.6);backdrop-filter:blur(6px);border-radius:12px;padding:10px 14px;font-size:14px}
+#list{top:12px;right:12px;min-width:150px}
+#chat{left:12px;bottom:12px;width:320px}
+#log{height:120px;overflow-y:auto;margin-bottom:6px;line-height:1.4}
+#msg{width:100%;box-sizing:border-box;background:rgba(255,255,255,.1);border:0;border-radius:8px;color:#fff;padding:6px 8px}
+#login{position:fixed;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;background:#101620}
+#login h1{letter-spacing:4px;margin:0}
+#login input,#login button{padding:10px 14px;border-radius:8px;border:0;font-size:16px}
+#login button{background:#3498db;color:#fff;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="box" id="list"></div>
+<div class="box" id="chat"><div id="log"></div><input id="msg" placeholder="Enter para conversar" maxlength="140"></div>
+<div id="login"><h1>CITY LIFE ONLINE</h1><input id="name" placeholder="Seu nome" maxlength="16"><button id="go">Entrar na cidade</button><small id="err"></small><small>WASD move · Shift corre · Enter chat</small></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const resize = () => { cv.width = innerWidth; cv.height = innerHeight; };
+addEventListener('resize', resize); resize();
+const socket = io();
+let me = null, map = null, target = [], shown = {};
+const $ = (id) => document.getElementById(id);
+
+$('go').onclick = () => socket.emit('join', $('name').value);
+$('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
+socket.on('full', () => ($('err').textContent = 'Sala cheia.'));
+socket.on('init', (d) => { me = d.id; map = d.map; $('login').style.display = 'none'; });
+socket.on('state', (s) => { target = s; });
+socket.on('chat', (m) => {
+  const d = document.createElement('div');
+  d.textContent = m.n + ': ' + m.t; $('log').appendChild(d); $('log').scrollTop = 1e9;
+});
+
+// Entrada
+const keys = {};
+let last = '';
+addEventListener('keydown', (e) => {
+  if (document.activeElement === $('msg')) {
+    if (e.key === 'Enter') { if ($('msg').value.trim()) socket.emit('chat', $('msg').value); $('msg').value = ''; $('msg').blur(); }
+    return;
+  }
+  if (e.key === 'Enter') { e.preventDefault(); $('msg').focus(); return; }
+  keys[e.code] = true;
+});
+addEventListener('keyup', (e) => (keys[e.code] = false));
+setInterval(() => {
+  if (!me) return;
+  const i = { x: (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0), y: (keys.KeyS ? 1 : 0) - (keys.KeyW ? 1 : 0), run: !!(keys.ShiftLeft || keys.ShiftRight) };
+  const k = JSON.stringify(i);
+  if (k !== last) { last = k; socket.emit('input', i); }
+}, 33);
+
+// Desenho
+function draw() {
+  requestAnimationFrame(draw);
+  if (!map) return;
+  for (const p of target) {
+    const s = shown[p.id] || (shown[p.id] = { x: p.x, y: p.y });
+    s.x += (p.x - s.x) * 0.3; s.y += (p.y - s.y) * 0.3; s.n = p.n; s.c = p.c; s.seen = true;
+  }
+  const ids = new Set(target.map((p) => p.id));
+  for (const id in shown) if (!ids.has(id)) delete shown[id];
+  const m = shown[me] || { x: 0, y: 0 };
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#3a3d42'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.translate(cv.width / 2 - m.x, cv.height / 2 - m.y);
+  ctx.fillStyle = '#e8c84a';
+  for (let k = -map.N - 1; k <= map.N; k++) {
+    const p = (k + 0.5) * map.B;
+    ctx.fillRect(p - 2, -map.LIMIT, 4, map.LIMIT * 2); ctx.fillRect(-map.LIMIT, p - 2, map.LIMIT * 2, 4);
+  }
+  for (const b of map.blocks) { ctx.fillStyle = b.park ? '#4a9a4a' : '#9a9a9a'; ctx.fillRect(b.x, b.y, b.w, b.h); }
+  for (const t of map.trees) { ctx.fillStyle = '#2f6f3a'; ctx.beginPath(); ctx.arc(t[0], t[1], 14, 0, 7); ctx.fill(); }
+  for (const b of map.buildings) {
+    ctx.fillStyle = 'hsl(' + b.c + ',25%,45%)'; ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = 'hsl(' + b.c + ',25%,60%)'; ctx.fillRect(b.x + 8, b.y + 8, b.w - 16, b.h - 16);
+  }
+  ctx.textAlign = 'center'; ctx.font = '13px system-ui';
+  for (const id in shown) {
+    const s = shown[id];
+    ctx.fillStyle = s.c; ctx.beginPath(); ctx.arc(s.x, s.y, 12, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.fillText(s.n, s.x, s.y - 20);
+  }
+  $('list').innerHTML = '<b>Online (' + target.length + ')</b><br>' + target.map((p) => p.n).join('<br>');
+}
+draw();
+</script>
+</body>
+</html>
