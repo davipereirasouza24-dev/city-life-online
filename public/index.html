@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<title>City Life Online 2D</title>
+<title>City Life Online 3D</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 html,body{height:100%;margin:0;background:#101620;overflow:hidden;font-family:system-ui,sans-serif;color:#fff}
@@ -10,92 +10,191 @@ canvas{display:block}
 .box{position:fixed;background:rgba(15,20,30,.6);backdrop-filter:blur(6px);border-radius:12px;padding:10px 14px;font-size:14px}
 #list{top:12px;right:12px;min-width:150px}
 #chat{left:12px;bottom:12px;width:320px}
-#log{height:120px;overflow-y:auto;margin-bottom:6px;line-height:1.4}
+#log{height:110px;overflow-y:auto;margin-bottom:6px;line-height:1.4}
 #msg{width:100%;box-sizing:border-box;background:rgba(255,255,255,.1);border:0;border-radius:8px;color:#fff;padding:6px 8px}
-#login{position:fixed;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;background:#101620}
+#info{top:12px;left:12px}
+#speed{right:12px;bottom:12px;font-size:28px;font-weight:700;display:none}
+#hint{left:50%;transform:translateX(-50%);bottom:24px;display:none}
+#login,#pause{position:fixed;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;background:rgba(16,22,32,.92);text-align:center}
+#pause{display:none;cursor:pointer;background:rgba(10,14,22,.6)}
 #login h1{letter-spacing:4px;margin:0}
 #login input,#login button{padding:10px 14px;border-radius:8px;border:0;font-size:16px}
 #login button{background:#3498db;color:#fff;cursor:pointer}
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<div class="box" id="info">WASD andar/dirigir · SHIFT correr · F entrar/sair do carro · ENTER chat</div>
 <div class="box" id="list"></div>
 <div class="box" id="chat"><div id="log"></div><input id="msg" placeholder="Enter para conversar" maxlength="140"></div>
-<div id="login"><h1>CITY LIFE ONLINE</h1><input id="name" placeholder="Seu nome" maxlength="16"><button id="go">Entrar na cidade</button><small id="err"></small><small>WASD move · Shift corre · Enter chat</small></div>
+<div class="box" id="speed"></div>
+<div class="box" id="hint">Pressione F para entrar no carro</div>
+<div id="pause"><h2>Clique para continuar</h2></div>
+<div id="login"><h1>CITY LIFE ONLINE</h1><input id="name" placeholder="Seu nome" maxlength="16"><button id="go">Entrar na cidade</button><small id="err"></small></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const resize = () => { cv.width = innerWidth; cv.height = innerHeight; };
-addEventListener('resize', resize); resize();
-const socket = io();
-let me = null, map = null, target = [], shown = {};
 const $ = (id) => document.getElementById(id);
+const socket = io();
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8ec5ee);
+scene.fog = new THREE.Fog(0x8ec5ee, 120, 450);
+const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 1000);
+scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x556655, 0.85));
+const sun = new THREE.DirectionalLight(0xfff2d6, 0.9);
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, near: 1, far: 400 });
+scene.add(sun, sun.target);
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
+const std = (c, o) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.85 }, o));
+const mk = (w, h, d, m) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.castShadow = o.receiveShadow = true; return o; };
+const hsl = (h, s, l) => new THREE.Color().setHSL(h / 360, s, l);
+
+// ----- Mundo -----
+function build(map) {
+  const { B, S, N, LIMIT } = map, E = LIMIT + 100;
+  const g = new THREE.Mesh(new THREE.PlaneGeometry(E * 2, E * 2), std(0x3a3d42));
+  g.rotation.x = -Math.PI / 2; g.receiveShadow = true; scene.add(g);
+  const lm = new THREE.MeshBasicMaterial({ color: 0xe8c84a });
+  for (let k = -N - 1; k <= N; k++) {
+    const p = (k + 0.5) * B;
+    const a = new THREE.Mesh(new THREE.PlaneGeometry(0.4, LIMIT * 2), lm); a.rotation.x = -Math.PI / 2; a.position.set(p, 0.04, 0);
+    const b = new THREE.Mesh(new THREE.PlaneGeometry(0.4, LIMIT * 2), lm); b.rotation.set(-Math.PI / 2, 0, Math.PI / 2); b.position.set(0, 0.04, p);
+    scene.add(a, b);
+  }
+  for (let i = -N; i <= N; i++) for (let j = -N; j <= N; j++) {
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(S, S), std(0x9a9a9a)); s.rotation.x = -Math.PI / 2; s.position.set(i * B, 0.03, j * B); s.receiveShadow = true; scene.add(s);
+  }
+  for (const [x, z] of map.parks) { const s = new THREE.Mesh(new THREE.PlaneGeometry(S - 2, S - 2), std(0x4a9a4a)); s.rotation.x = -Math.PI / 2; s.position.set(x, 0.06, z); scene.add(s); }
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const cx = c.getContext('2d'); cx.fillStyle = '#4a5566'; cx.fillRect(0, 0, 64, 64);
+  for (let y = 4; y < 64; y += 16) for (let x = 4; x < 64; x += 16) { cx.fillStyle = Math.random() > 0.3 ? '#bfe3ff' : '#2b3445'; cx.fillRect(x, y, 10, 10); }
+  const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  for (const b of map.buildings) {
+    let m;
+    if (b.t) { const t = tex.clone(); t.needsUpdate = true; t.repeat.set(4, Math.round(b.h / 4)); m = std(hsl(b.c, 0.2, 0.7), { map: t, roughness: 0.5, metalness: 0.2 }); }
+    else m = std(hsl(40 + (b.c % 30), 0.35, 0.8));
+    const o = mk(b.w, b.h, b.w, m); o.position.set(b.x, b.h / 2, b.z); scene.add(o);
+    if (!b.t) { const r = mk(b.w + 1, 1.2, b.w + 1, std(hsl(b.c, 0.4, 0.4))); r.position.set(b.x, b.h + 0.6, b.z); scene.add(r); }
+  }
+  const trunk = std(0x6b4a2b), leaf = std(0x2f8f3f);
+  for (const [x, z] of map.trees) {
+    const t = mk(0.5, 3, 0.5, trunk); t.position.set(x, 1.5, z);
+    const l = new THREE.Mesh(new THREE.SphereGeometry(2.2, 10, 8), leaf); l.position.set(x, 4.5, z); l.castShadow = true; scene.add(t, l);
+  }
+}
+
+// ----- Modelos -----
+function limb(w, h, m, x, y) { const g = new THREE.Group(); g.position.set(x, y, 0); const l = mk(w, h, w, m); l.position.y = -h / 2; g.add(l); return g; }
+function figure(hue) {
+  const g = new THREE.Group(), skin = std(0xf1c9a5), sh = std(hsl(hue, 0.6, 0.45)), pa = std(0x2b2f3a);
+  const t = mk(0.8, 0.9, 0.4, sh); t.position.y = 1.35;
+  const h = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), skin); h.position.y = 2.1; h.castShadow = true;
+  g.legs = [limb(0.3, 0.9, pa, -0.2, 0.9), limb(0.3, 0.9, pa, 0.2, 0.9)];
+  g.arms = [limb(0.22, 0.8, skin, -0.52, 1.75), limb(0.22, 0.8, skin, 0.52, 1.75)];
+  g.add(t, h, ...g.legs, ...g.arms); g.ph = 0; scene.add(g); return g;
+}
+function carModel(hue) {
+  const g = new THREE.Group();
+  const b = mk(2, 0.7, 4.2, std(hsl(hue, 0.7, 0.45), { roughness: 0.3, metalness: 0.5 })); b.position.y = 0.65;
+  const cab = mk(1.7, 0.6, 2.2, std(0x222a35, { roughness: 0.2 })); cab.position.set(0, 1.25, -0.2);
+  g.add(b, cab);
+  const wg = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 12), wm = std(0x111111);
+  for (const [x, z] of [[-1.05, 1.4], [1.05, 1.4], [-1.05, -1.4], [1.05, -1.4]]) { const w = new THREE.Mesh(wg, wm); w.rotation.z = Math.PI / 2; w.position.set(x, 0.4, z); w.castShadow = true; g.add(w); }
+  scene.add(g); return g;
+}
+function tag(text) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64; const x = c.getContext('2d');
+  x.font = 'bold 30px system-ui'; x.textAlign = 'center'; x.lineWidth = 6; x.strokeStyle = '#000'; x.strokeText(text, 128, 42); x.fillStyle = '#fff'; x.fillText(text, 128, 42);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false })); s.scale.set(4, 1, 1); s.position.y = 2.9; s.renderOrder = 9; return s;
+}
+const turn = (g, a, k) => { g.rotation.y += Math.atan2(Math.sin(a - g.rotation.y), Math.cos(a - g.rotation.y)) * k; };
+function move(g, x, z, a, k) { const px = g.position.x, pz = g.position.z; g.position.x += (x - px) * k; g.position.z += (z - pz) * k; turn(g, a, k); return Math.hypot(g.position.x - px, g.position.z - pz); }
+function walk(g, d) {
+  const v = d * 30, sw = Math.min(v, 9) > 0.3 ? Math.sin((g.ph += d * 2.2)) * 0.8 : 0;
+  g.legs[0].rotation.x = sw; g.legs[1].rotation.x = -sw; g.arms[0].rotation.x = -sw; g.arms[1].rotation.x = sw;
+}
+
+// ----- Rede / estado -----
+let me = null, st = { p: [], c: [], n: [] };
+const pl = {}, cr = {}, np = [];
 $('go').onclick = () => socket.emit('join', $('name').value);
 $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
 socket.on('full', () => ($('err').textContent = 'Sala cheia.'));
-socket.on('init', (d) => { me = d.id; map = d.map; $('login').style.display = 'none'; });
-socket.on('state', (s) => { target = s; });
-socket.on('chat', (m) => {
-  const d = document.createElement('div');
-  d.textContent = m.n + ': ' + m.t; $('log').appendChild(d); $('log').scrollTop = 1e9;
-});
+socket.on('init', (d) => { me = d.id; build(d.map); $('login').style.display = 'none'; renderer.domElement.requestPointerLock(); });
+socket.on('state', (s) => { st = s; });
+socket.on('chat', (m) => { const d = document.createElement('div'); d.textContent = m.n + ': ' + m.t; $('log').appendChild(d); $('log').scrollTop = 1e9; });
 
-// Entrada
-const keys = {};
-let last = '';
+// ----- Entrada -----
+const keys = {}; let yaw = 0, pitch = 0.35, locked = false, last = '';
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; $('pause').style.display = me && !locked && document.activeElement !== $('msg') ? 'flex' : 'none'; });
+$('pause').onclick = () => renderer.domElement.requestPointerLock();
+addEventListener('mousemove', (e) => { if (!locked) return; yaw -= e.movementX * 0.0025; pitch = Math.max(-0.2, Math.min(1.2, pitch + e.movementY * 0.0025)); });
 addEventListener('keydown', (e) => {
   if (document.activeElement === $('msg')) {
-    if (e.key === 'Enter') { if ($('msg').value.trim()) socket.emit('chat', $('msg').value); $('msg').value = ''; $('msg').blur(); }
+    if (e.key === 'Enter') { if ($('msg').value.trim()) socket.emit('chat', $('msg').value); $('msg').value = ''; $('msg').blur(); renderer.domElement.requestPointerLock(); }
     return;
   }
-  if (e.key === 'Enter') { e.preventDefault(); $('msg').focus(); return; }
+  if (!me) return;
+  if (e.key === 'Enter') { e.preventDefault(); document.exitPointerLock(); $('msg').focus(); return; }
+  if (e.code === 'KeyF' && !keys.KeyF) socket.emit('enter');
   keys[e.code] = true;
 });
 addEventListener('keyup', (e) => (keys[e.code] = false));
 setInterval(() => {
   if (!me) return;
-  const i = { x: (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0), y: (keys.KeyS ? 1 : 0) - (keys.KeyW ? 1 : 0), run: !!(keys.ShiftLeft || keys.ShiftRight) };
+  const fw = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), rt = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+  const i = { x: -Math.sin(yaw) * fw + Math.cos(yaw) * rt, z: -Math.cos(yaw) * fw - Math.sin(yaw) * rt, run: !!(keys.ShiftLeft || keys.ShiftRight), t: fw, s: rt };
+  i.x = Math.round(i.x * 100) / 100; i.z = Math.round(i.z * 100) / 100;
   const k = JSON.stringify(i);
   if (k !== last) { last = k; socket.emit('input', i); }
 }, 33);
 
-// Desenho
-function draw() {
-  requestAnimationFrame(draw);
-  if (!map) return;
-  for (const p of target) {
-    const s = shown[p.id] || (shown[p.id] = { x: p.x, y: p.y });
-    s.x += (p.x - s.x) * 0.3; s.y += (p.y - s.y) * 0.3; s.n = p.n; s.c = p.c; s.seen = true;
+// ----- Loop -----
+const camPos = new THREE.Vector3(0, 6, 8), tgt = new THREE.Vector3(); let camYaw = 0, spd = 0;
+function loop() {
+  requestAnimationFrame(loop);
+  if (!me) { renderer.render(scene, camera); return; }
+  const ids = new Set();
+  for (const p of st.p) {
+    ids.add(p.id);
+    let g = pl[p.id];
+    if (!g) { g = pl[p.id] = figure(p.h); if (p.id !== me) g.add(tag(p.n)); g.position.set(p.x, 0, p.z); }
+    g.visible = !p.car; walk(g, move(g, p.x, p.z, p.a, 0.35));
   }
-  const ids = new Set(target.map((p) => p.id));
-  for (const id in shown) if (!ids.has(id)) delete shown[id];
-  const m = shown[me] || { x: 0, y: 0 };
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#3a3d42'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.translate(cv.width / 2 - m.x, cv.height / 2 - m.y);
-  ctx.fillStyle = '#e8c84a';
-  for (let k = -map.N - 1; k <= map.N; k++) {
-    const p = (k + 0.5) * map.B;
-    ctx.fillRect(p - 2, -map.LIMIT, 4, map.LIMIT * 2); ctx.fillRect(-map.LIMIT, p - 2, map.LIMIT * 2, 4);
+  for (const id in pl) if (!ids.has(id)) { scene.remove(pl[id]); delete pl[id]; }
+  for (const c of st.c) {
+    let g = cr[c[0]];
+    if (!g) { g = cr[c[0]] = carModel(c[4]); g.position.set(c[1], 0, c[2]); g.rotation.y = c[3]; }
+    const d = move(g, c[1], c[2], c[3], 0.4); g.userData.v = d * 30;
   }
-  for (const b of map.blocks) { ctx.fillStyle = b.park ? '#4a9a4a' : '#9a9a9a'; ctx.fillRect(b.x, b.y, b.w, b.h); }
-  for (const t of map.trees) { ctx.fillStyle = '#2f6f3a'; ctx.beginPath(); ctx.arc(t[0], t[1], 14, 0, 7); ctx.fill(); }
-  for (const b of map.buildings) {
-    ctx.fillStyle = 'hsl(' + b.c + ',25%,45%)'; ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.fillStyle = 'hsl(' + b.c + ',25%,60%)'; ctx.fillRect(b.x + 8, b.y + 8, b.w - 16, b.h - 16);
+  st.n.forEach((n, i) => { let g = np[i] || (np[i] = figure(n[3])); walk(g, move(g, n[0], n[1], n[2], 0.3)); });
+  const mp = st.p.find((p) => p.id === me), mg = pl[me], cg = mp && mp.car ? cr[mp.car] : null;
+  if (mg) {
+    const ref = cg || mg;
+    if (cg) { camYaw += Math.atan2(Math.sin(cg.rotation.y + Math.PI - camYaw), Math.cos(cg.rotation.y + Math.PI - camYaw)) * 0.06; yaw = camYaw; }
+    else camYaw = yaw;
+    tgt.set(ref.position.x, ref.position.y + (cg ? 1.6 : 1.7), ref.position.z);
+    const dist = cg ? 9 : 6.5;
+    const want = new THREE.Vector3(Math.sin(camYaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(camYaw) * Math.cos(pitch)).multiplyScalar(dist).add(tgt);
+    want.y = Math.max(0.8, want.y);
+    camPos.lerp(want, 0.15); camera.position.copy(camPos); camera.lookAt(tgt);
+    sun.position.set(ref.position.x + 80, 140, ref.position.z + 60); sun.target.position.copy(ref.position);
+    $('speed').style.display = cg ? 'block' : 'none';
+    if (cg) { spd += (cg.userData.v * 3.6 - spd) * 0.1; $('speed').textContent = Math.round(spd) + ' km/h'; }
+    let near = false;
+    if (!cg) for (const c of st.c) if (!c[5] && String(c[0])[0] === 'c' && Math.hypot(c[1] - mg.position.x, c[2] - mg.position.z) < 5) near = true;
+    $('hint').style.display = near ? 'block' : 'none';
   }
-  ctx.textAlign = 'center'; ctx.font = '13px system-ui';
-  for (const id in shown) {
-    const s = shown[id];
-    ctx.fillStyle = s.c; ctx.beginPath(); ctx.arc(s.x, s.y, 12, 0, 7); ctx.fill();
-    ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.fillText(s.n, s.x, s.y - 20);
-  }
-  $('list').innerHTML = '<b>Online (' + target.length + ')</b><br>' + target.map((p) => p.n).join('<br>');
+  $('list').innerHTML = '<b>Online (' + st.p.length + ')</b><br>' + st.p.map((p) => p.n).join('<br>');
+  renderer.render(scene, camera);
 }
-draw();
+loop();
 </script>
 </body>
 </html>
